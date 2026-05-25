@@ -1,0 +1,73 @@
+services:
+  wireguard:
+    image: linuxserver/wireguard:latest
+    container_name: gateway-wireguard
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - SERVERURL=auto
+      - SERVERPORT=51820
+      - PEERS=homeserver
+      - PEERDNS=auto
+      - INTERNAL_SUBNET=10.8.0.0/24
+    ports:
+      - "51820:51820/udp"
+    volumes:
+      - ./wireguard/config:/config
+      - /lib/modules:/lib/modules
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: gateway-nginx
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./certbot/letsencrypt:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot:ro
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+    depends_on:
+      - wireguard
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+    restart: unless-stopped
+
+  rtpengine:
+    image: rtpengine:latest
+    container_name: gateway-rtpengine
+    network_mode: "host"
+    privileged: true
+    restart: unless-stopped
+
+  kamailio:
+    image: alpine:latest
+    container_name: gateway-kamailio
+    network_mode: "host"
+    volumes:
+      - ./kamailio/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
+    depends_on:
+      - rtpengine
+    entrypoint: >
+      /bin/sh -c "
+      apk update && 
+      apk add --no-cache kamailio kamailio-json kamailio-utils;
+      kamailio -DD -E -f /etc/kamailio/kamailio.cfg
+      "
+    restart: unless-stopped
+
+  # Certbot Service (Added)
+  certbot:
+    image: certbot/certbot:latest
+    container_name: gateway-certbot
+    volumes:
+      - ./certbot/letsencrypt:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12d; done;'"
